@@ -55,6 +55,13 @@ char create_detailTable_sqlite[] = "CREATE TABLE DETAILS ("
 					"ROTATION INTEGER, "
 					"DLNA_PN TEXT, "
                                         "MIME TEXT);";
+                                        
+char create_progressTable_sqlite[] = "CREATE TABLE PROGRESS ("
+						"ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+						"OBJECT_ID INTEGER DEFAULT NULL, "
+						"WATCHED_COUNT INTEGER DEFAULT 0, "
+						"LAST_PLAYBACK_POSITION INTEGER DEFAULT 0"
+					");";
 
 char create_albumArtTable_sqlite[] = "CREATE TABLE ALBUM_ART ("
 					"ID INTEGER PRIMARY KEY AUTOINCREMENT, "

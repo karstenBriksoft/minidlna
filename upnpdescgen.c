@@ -272,6 +272,14 @@ static const struct argument GetSystemUpdateIDArgs[] =
 	{0, 0}
 };
 
+static const struct argument UpdateObjectArgs[] =
+{
+	{"ObjectID", 1, 1},
+	{"CurrentTagValue", 1, 13},
+	{"NewTagValue", 1, 13},
+	{0, 0}
+};
+
 static const struct argument BrowseArgs[] =
 {
 	{"ObjectID", 1, 1},
@@ -309,10 +317,10 @@ static const struct action ContentDirectoryActions[] =
 	{"GetSystemUpdateID", GetSystemUpdateIDArgs}, /* R */
 	{"Browse", BrowseArgs}, /* R */
 	{"Search", SearchArgs}, /* O */
+	{"UpdateObject", UpdateObjectArgs},
 #if 0 // Not implementing optional features yet...
 	{"CreateObject", CreateObjectArgs}, /* O */
 	{"DestroyObject", DestroyObjectArgs}, /* O */
-	{"UpdateObject", UpdateObjectArgs}, /* O */
 	{"ImportResource", ImportResourceArgs}, /* O */
 	{"ExportResource", ExportResourceArgs}, /* O */
 	{"StopTransferResource", StopTransferResourceArgs}, /* O */
@@ -339,6 +347,7 @@ static const struct stateVar ContentDirectoryVars[] =
 	{"SearchCapabilities", 0, 0},
 	{"SortCapabilities", 0, 0},
 	{"SystemUpdateID", 3|EVENTED, 0, 0, 255},
+	{"A_ARG_TYPE_TagValueList", 0, 0},
 	{0, 0}
 };
 

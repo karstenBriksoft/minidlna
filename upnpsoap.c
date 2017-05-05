@@ -399,6 +399,8 @@ GetCurrentConnectionInfo(struct upnphttp * h, const char * action)
 #define FILTER_PV_SUBTITLE_FILE_URI              0x08000000
 #define FILTER_PV_SUBTITLE                       0x0C000000
 #define FILTER_AV_MEDIA_CLASS                    0x10000000
+#define FILTER_WATCH_COUNT						 0x20000000
+#define FILTER_LAST_PLAYBACK_POSITION			 0x30000000
 
 static uint32_t
 set_filter_flags(char *filter, struct upnphttp *h)
@@ -558,6 +560,14 @@ set_filter_flags(char *filter, struct upnphttp *h)
 		{
 			flags |= FILTER_AV_MEDIA_CLASS;
 		}
+		else if( strcmp(item, "upnp:playbackCount") == 0 )
+		{
+			flags |= FILTER_WATCH_COUNT;
+		}
+		else if( strcmp(item, "upnp:lastPlaybackPosition") == 0 )
+		{
+			flags |= FILTER_LAST_PLAYBACK_POSITION;
+		}
 		item = strtok_r(NULL, ",", &saveptr);
 	}
 
@@ -669,7 +679,7 @@ add_resized_res(int srcw, int srch, int reqw, int reqh, char *dlna_pn,
 	int dstw = reqw;
 	int dsth = reqh;
 
-	if( (args->flags & FLAG_NO_RESIZE) && reqw > 160 && reqh > 160 )
+	if( (args->flags & FLAG_NO_RESIZE) && reqw > 500 && reqh > 500 )
 		return;
 
 	strcatf(args->str, "&lt;res ");
@@ -761,13 +771,18 @@ object_exists(const char *object)
 	return (ret > 0);
 }
 
+#define FROM_TABLES "from OBJECTS o" \
+					  " left join DETAILS d on (d.ID = o.DETAIL_ID)" \
+					  " left join PROGRESS p on (p.OBJECT_ID = o.ID)"
+					  
 // using o.DETAIL_ID || '_' || strfttime('%%s',d.DATE) will generate IDs like 123_234234234
 // these IDs are distinct as soon as a rescan happens, invalidating possible client caches
 // the ID is then parsed in upnphttp.c using strtoll() which will stop at '_' and ignore the rest 
 #define COLUMNS "o.DETAIL_ID || '_' || strftime('%%s',d.DATE) , o.CLASS," \
                 " d.SIZE, d.TITLE, d.DURATION, d.BITRATE, d.SAMPLERATE, d.ARTIST," \
                 " d.ALBUM, d.GENRE, d.COMMENT, d.CHANNELS, d.TRACK, d.DATE, d.RESOLUTION," \
-                " d.THUMBNAIL, d.CREATOR, d.DLNA_PN, d.MIME, d.ALBUM_ART, d.ROTATION, d.DISC "
+                " d.THUMBNAIL, d.CREATOR, d.DLNA_PN, d.MIME, d.ALBUM_ART, d.ROTATION, d.DISC," \
+                " p.WATCHED_COUNT, p.LAST_PLAYBACK_POSITION "
 #define SELECT_COLUMNS "SELECT o.OBJECT_ID, o.PARENT_ID, o.REF_ID, " COLUMNS
 
 #define NON_ZERO(x) (x && atoi(x))
@@ -780,7 +795,8 @@ callback(void *args, int argc, char **argv, char **azColName)
 	char *id = argv[0], *parent = argv[1], *refID = argv[2], *detailID = argv[3], *class = argv[4], *size = argv[5], *title = argv[6],
 	     *duration = argv[7], *bitrate = argv[8], *sampleFrequency = argv[9], *artist = argv[10], *album = argv[11],
 	     *genre = argv[12], *comment = argv[13], *nrAudioChannels = argv[14], *track = argv[15], *date = argv[16], *resolution = argv[17],
-	     *tn = argv[18], *creator = argv[19], *dlna_pn = argv[20], *mime = argv[21], *album_art = argv[22], *rotate = argv[23];
+	     *tn = argv[18], *creator = argv[19], *dlna_pn = argv[20], *mime = argv[21], *album_art = argv[22], *rotate = argv[23], *disk = argv[24],
+	     *watchCount = argv[25], *lastPlaybackPosition = argv[26];
 	char dlna_buf[128];
 	const char *ext;
 	struct string_s *str = passed_args->str;
@@ -987,7 +1003,7 @@ callback(void *args, int argc, char **argv, char **azColName)
 					                   runtime_vars.port, detailID);
 				}
 				else
-					add_resized_res(srcw, srch, 160, 160, "JPEG_TN", detailID, passed_args);
+					add_resized_res(srcw, srch, 500, 500, "JPEG_TN", detailID, passed_args);
 			}
 			else if( *mime == 'v' ) {
 				switch( passed_args->client ) {
@@ -1109,10 +1125,16 @@ callback(void *args, int argc, char **argv, char **azColName)
 				                   lan_addr[passed_args->iface].str, runtime_vars.port, detailID);
 			} else {
 				ret = strcatf(str, "&lt;upnp:albumArtURI&gt;"
-				                   "http://%s:%d/Resized/%s.jpg?width=160,height=160"
+				                   "http://%s:%d/Resized/%s.jpg?width=500,height=500"
 				                   "&lt;/upnp:albumArtURI&gt;",
 				                   lan_addr[passed_args->iface].str, runtime_vars.port, detailID);
 			}
+		}
+		if( watchCount && (passed_args->filter & FILTER_WATCH_COUNT) ) {
+			ret = strcatf(str, "&lt;upnp:playbackCount&gt;%s&lt;/upnp:playbackCount&gt;", watchCount);
+		}
+		if( lastPlaybackPosition && (passed_args->filter & FILTER_LAST_PLAYBACK_POSITION) ) {
+			ret = strcatf(str, "&lt;upnp:lastPlaybackPosition&gt;%s&lt;/upnp:lastPlaybackPosition&gt;", lastPlaybackPosition);
 		}
 		ret = strcatf(str, "&lt;/item&gt;");
 	}
@@ -1176,6 +1198,138 @@ callback(void *args, int argc, char **argv, char **azColName)
 
 	return 0;
 }
+
+// use like: int didScan = scanXMLParam("&lt;upnp:playCount&gt;0&lt;/upnp:playCount&gt;","upnp:playCount",&result);
+static inline int scanXMLParam(char* string, char* param, int* result)
+{
+	char* lt = "&lt;";
+	char* gt = "&gt;";
+	
+	DPRINTF(E_DEBUG, L_HTTP, "UPnP SOAP:: \t\tscanXML: %s for %s\n", string, param);
+	
+	char* currentStart = strstr(string,lt);
+	while (currentStart != NULL)
+	{
+		DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\t\tcursor: %c @ %i\n", *currentStart, currentStart - string);
+		char* nameStart = currentStart + strlen(lt);
+		DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\t\tname: %s\n", nameStart);
+		if (strncmp(nameStart,param,strlen(param)) == 0)
+		{
+			DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\t\tmatch: at %i\n", nameStart - string);
+			// found the param, skip behind the param name and return the number
+			char* argStart = nameStart + strlen(param) + strlen(gt);
+			DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\t\tparam: %c @ %i\n", *argStart, argStart - string);
+			
+			*result = atol(argStart);
+			return 1;
+		}
+		else
+		{
+			DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\t\tskipping\n");
+			// did not find the param, search for the param behind the param to skip through the whole xml element
+			currentStart = strstr(nameStart + strlen(nameStart),param);
+			if (currentStart != NULL)
+			{
+				currentStart = strstr(currentStart,lt);
+			}
+		}
+	}
+	DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\tscanXML nothing found\n");
+	return 0;
+}
+
+static void UpdateObject(struct upnphttp * h, const char * action)
+{
+        struct NameValueParserData data;
+
+ParseNameValue(h->req_buf + h->req_contentoff, h->req_contentlen, &data, 0);
+
+        char* ObjectID = GetValueFromNameValueList(&data, "ObjectID");
+        if (ObjectID)
+        {       
+                // replace url encoded $s from %24 to $
+                char* c = ObjectID;
+                char* end = ObjectID + strlen(ObjectID);
+                while ((c = strstr(c,"%24")))
+                {       
+                        *c = '$';
+                        memmove(c+1, c+3, end - (c+2));
+                }
+                
+                // remove trailing Slash, no idea why Kodi adds that
+                if (ObjectID[strlen(ObjectID) - 1] == '/')
+                {       
+                        ObjectID[strlen(ObjectID) - 1] = '\0';
+                }
+        }
+//        char* CurrentTagValue = GetValueFromNameValueList(&data, "CurrentTagValue");
+        char* NewTagValue = GetValueFromNameValueList(&data, "NewTagValue");
+        char* wholeRequest = NULL;
+        if (NewTagValue == NULL)
+        {
+                wholeRequest = (char*)calloc(h->req_contentlen + 1,sizeof(char));
+                strncpy(wholeRequest,h->req_buf + h->req_contentoff,h->req_contentlen + 1);
+        }
+        char* filePath = sql_get_text_field(db, "SELECT d.path from DETAILS d inner join OBJECTS o on d.id = o.DETAIL_ID where o.OBJECT_ID = '%q'", ObjectID);
+        DPRINTF(E_WARN, L_HTTP, "UPnP SOAP::UpdateObject %s => %s\n",
+                filePath, NewTagValue == NULL ? wholeRequest : NewTagValue);
+        if (wholeRequest != NULL) free(wholeRequest);
+        sqlite3_free(filePath);
+
+        // example log:
+        //      
+        // UPnP SOAP::UpdateObject 2%2415%240/ - &lt;upnp:playCount&gt;0&lt;/upnp:playCount&gt; => &lt;upnp:playCount&gt;1&lt;/upnp:playCount&gt;
+        // 
+        if (NewTagValue != NULL)
+        {
+                int progressID = sql_get_int_field(db, "SELECT ID from PROGRESS where OBJECT_ID = '%q'", ObjectID);
+                DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP::\t\tProgressID = %i\n",progressID);
+                int playCount = progressID ? sql_get_int_field(db, "SELECT WATCHED_COUNT from PROGRESS where ID = '%i'", progressID) : 0;
+                int lastLocation = progressID ? sql_get_int_field(db, "SELECT LAST_PLAYBACK_POSITION from PROGRESS where ID = '%i'", progressID) : 0;
+
+                int needsToUpdate = 0;
+                if (scanXMLParam(NewTagValue,"upnp:playCount",&playCount) == 1)
+                {
+                        // update playcount
+                        DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\tplaycount: %i\n", playCount);
+                        needsToUpdate = 1;
+                }
+                if (scanXMLParam(NewTagValue,"upnp:lastPlaybackPosition",&lastLocation) == 1)
+                {
+                        // update location
+                        DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\tlastLocation: %i\n", lastLocation);
+                        needsToUpdate = 1;
+                }
+
+                if (needsToUpdate == 1)
+                {
+                        DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP:: \t\tupdating progress database for: %s\n", ObjectID);
+                        int ret = sql_exec(db, "INSERT OR REPLACE into PROGRESS"
+                                           " VALUES "
+                                           "((select ID from PROGRESS where OBJECT_ID = '%q'), '%q', %i, %i)", ObjectID, ObjectID, playCount, lastLocation);
+                        if( ret != SQLITE_OK )
+                                DPRINTF(E_WARN, L_HTTP, "Error setting progres for WATCH_COUNT: %i / LAST_PLAYBACK_POSITION: %i on ObjectID='%s'\n", playCount, lastLocation, ObjectID);
+                        else
+                                DPRINTF(E_DEBUG, L_HTTP, "updated WATCH_COUNT: %i / LAST_PLAYBACK_POSITION: %i on ObjectID='%s'\n", playCount, lastLocation, ObjectID);
+                }
+                else
+                {
+                        DPRINTF(E_MAXDEBUG, L_HTTP, "UPnP SOAP::\t\tno update required\n");
+                }
+        }
+        static const char resp[] =
+                "<u:%sResponse "
+                "xmlns:u=\"%s\">"
+                "</u:%sResponse>";
+        char body[512];
+        int bodylen;
+
+        bodylen = snprintf(body, sizeof(body), resp,
+                action, "urn:schemas-upnp-org:service:ContentDirectory:1",
+                action);
+        BuildSendAndCloseSoapResp(h, body, bodylen);
+}
+
 
 static void
 BrowseContentDirectory(struct upnphttp * h, const char * action)
@@ -1283,8 +1437,8 @@ BrowseContentDirectory(struct upnphttp * h, const char * action)
 				refid_sql = magic->refid_sql;
 		}
 		sql = sqlite3_mprintf("SELECT %s, %s, %s, " COLUMNS
-				      "from OBJECTS o left join DETAILS d on (d.ID = o.DETAIL_ID)"
-				      " where OBJECT_ID = '%q';",
+				      FROM_TABLES
+				      " where o.OBJECT_ID = '%q';",
 				      objectid_sql, parentid_sql, refid_sql, id);
 		ret = sqlite3_exec(db, sql, callback, (void *) &args, &zErrMsg);
 		totalMatches = args.returned;
@@ -1333,7 +1487,7 @@ BrowseContentDirectory(struct upnphttp * h, const char * action)
 				if( strcmp(ObjectID, MUSIC_PLIST_ID) == 0 )
 					ret = xasprintf(&orderBy, "order by d.TITLE");
 				else
-					ret = xasprintf(&orderBy, "order by length(OBJECT_ID), OBJECT_ID");
+					ret = xasprintf(&orderBy, "order by length(o.OBJECT_ID), o.OBJECT_ID");
 			}
 			else if( args.flags & FLAG_FORCE_SORT )
 			{
@@ -1359,8 +1513,7 @@ BrowseContentDirectory(struct upnphttp * h, const char * action)
 			goto browse_error;
 		}
 
-		sql = sqlite3_mprintf("SELECT %s, %s, %s, " COLUMNS
-		                      "from OBJECTS o left join DETAILS d on (d.ID = o.DETAIL_ID)"
+		sql = sqlite3_mprintf("SELECT %s, %s, %s, " COLUMNS FROM_TABLES
 				      " where %s %s limit %d, %d;",
 				      objectid_sql, parentid_sql, refid_sql,
 				      where, THISORNUL(orderBy), StartingIndex, RequestedCount);
@@ -1790,16 +1943,14 @@ SearchContentDirectory(struct upnphttp * h, const char * action)
 		goto search_error;
 	}
 
-	sql = sqlite3_mprintf( SELECT_COLUMNS
-	                      "from OBJECTS o left join DETAILS d on (d.ID = o.DETAIL_ID)"
-	                      " where OBJECT_ID glob '%q%s' and (%s) %s "
+	sql = sqlite3_mprintf( SELECT_COLUMNS FROM_TABLES
+	                      " where o.OBJECT_ID glob '%q%s' and (%s) %s "
 	                      "%z %s"
 	                      " limit %d, %d",
 	                      ContainerID, sep, where, groupBy,
 	                      (*ContainerID == '*') ? NULL :
-	                      sqlite3_mprintf("UNION ALL " SELECT_COLUMNS
-	                                      "from OBJECTS o left join DETAILS d on (d.ID = o.DETAIL_ID)"
-	                                      " where OBJECT_ID = '%q' and (%s) ", ContainerID, where),
+	                      sqlite3_mprintf("UNION ALL " SELECT_COLUMNS FROM_TABLES
+	                                      " where o.OBJECT_ID = '%q' and (%s) ", ContainerID, where),
 	                      orderBy, StartingIndex, RequestedCount);
 	DPRINTF(E_DEBUG, L_HTTP, "Search SQL: %s\n", sql);
 	ret = sqlite3_exec(db, sql, callback, (void *) &args, &zErrMsg);
@@ -1973,6 +2124,7 @@ soapMethods[] =
 	{ "RegisterDevice", RegisterDevice},
 	{ "X_GetFeatureList", SamsungGetFeatureList},
 	{ "X_SetBookmark", SamsungSetBookmark},
+	{ "UpdateObject", UpdateObject },
 	{ 0, 0 }
 };
 
