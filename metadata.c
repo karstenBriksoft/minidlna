@@ -204,6 +204,7 @@ parse_nfo(const char *path, metadata_t *m)
 	}
 
 	val = GetValueFromNameValueList(&xml, "capturedate");
+	if (!val) val = GetValueFromNameValueList(&xml, "published");
 	if( val ) {
 		char *esc_tag = unescape_tag(val, 1);
 		m->date = escape_tag(esc_tag, 1);
@@ -541,7 +542,11 @@ GetImageMetadata(const char *path, char *name)
 		/* One last effort to get the date from XMP */
 		image_get_jpeg_date_xmp(path, &m.date);
 	}
-	//DEBUG DPRINTF(E_DEBUG, L_METADATA, " * date: %s\n", m.date);
+	if (m.date != NULL && strlen(m.date) > 10)
+	{
+		m.date[10] = '\0'; // Kodi doesn't like timestamps, only dates. So trim after the 2000-01-02
+	}
+	DPRINTF(E_DEBUG, L_METADATA, " * date: %s\n", m.date);
 
 	e = exif_content_get_entry(ed->ifd[EXIF_IFD_0], EXIF_TAG_MAKE);
 	if( e )

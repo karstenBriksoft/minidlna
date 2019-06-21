@@ -557,6 +557,9 @@ CreateDatabase(void)
 	ret = sql_exec(db, create_progressTable_sqlite);
 	if( ret != SQLITE_OK )
 		goto sql_failed;
+	ret = sql_exec(db, create_accessTable_sqlite);
+	if( ret != SQLITE_OK )
+		goto sql_failed;
 	ret = sql_exec(db, create_albumArtTable_sqlite);
 	if( ret != SQLITE_OK )
 		goto sql_failed;

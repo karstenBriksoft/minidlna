@@ -63,6 +63,12 @@ char create_progressTable_sqlite[] = "CREATE TABLE PROGRESS ("
 						"LAST_PLAYBACK_POSITION INTEGER DEFAULT 0"
 					");";
 
+char create_accessTable_sqlite[] = "CREATE TABLE ACCESS ("
+					"ID INTEGER PRIMARY KEY AUTOINCREMENT, "
+					"OBJECT_ID INTEGER DEFAULT NULL, "
+					"TIME DATETIME"
+					");";
+
 char create_albumArtTable_sqlite[] = "CREATE TABLE ALBUM_ART ("
 					"ID INTEGER PRIMARY KEY AUTOINCREMENT, "
 					"PATH TEXT NOT NULL"

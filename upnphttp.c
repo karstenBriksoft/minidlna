@@ -1883,6 +1883,7 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 	}
 	if( id != last_file.id || ctype != last_file.client )
 	{
+		sql_exec(db, "INSERT INTO ACCESS (OBJECT_ID, TIME) VALUES ((SELECT TITLE FROM DETAILS WHERE ID = '%lld'), datetime('now'));",(long long)id);
 		snprintf(buf, sizeof(buf), "SELECT PATH, MIME, DLNA_PN from DETAILS where ID = '%lld'", (long long)id);
 		ret = sql_get_table(db, buf, &result, &rows, NULL);
 		if( (ret != SQLITE_OK) )
